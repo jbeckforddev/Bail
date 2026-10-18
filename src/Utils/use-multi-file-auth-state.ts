@@ -1,158 +1,136 @@
-import Database from 'better-sqlite3';
-import fs from 'fs';
-import path from 'path';
-import { proto } from '../../WAProto/index.js';
-import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '../Types';
-import { initAuthCreds } from './auth-utils.js';
-import { BufferJSON } from './generics.js';
+import { Mutex } from 'async-mutex'
+import { mkdir, readFile, stat, unlink, writeFile } from 'fs/promises'
+import { join } from 'path'
+import { proto } from '../../WAProto/index.js'
+import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '../Types'
+import { initAuthCreds } from './auth-utils'
+import { BufferJSON } from './generics'
 
-export const useMultiFileAuthState = (
-	folder: string = 'auth_info_baileys'
-): { state: AuthenticationState; saveCreds: () => Promise<void>; close: () => void } => {
-	const folderPath = path.resolve(folder);
-	if (!fs.existsSync(folderPath)) {
-		fs.mkdirSync(folderPath, { recursive: true });
+// We need to lock files due to the fact that we are using async functions to read and write files
+// https://github.com/WhiskeySockets/Baileys/issues/794
+// https://github.com/nodejs/node/issues/26338
+// Use a Map to store mutexes for each file path
+const fileLocks = new Map<string, Mutex>()
+
+// Get or create a mutex for a specific file path
+const getFileLock = (path: string): Mutex => {
+	let mutex = fileLocks.get(path)
+	if (!mutex) {
+		mutex = new Mutex()
+		fileLocks.set(path, mutex)
 	}
 
-	const dbPath = path.join(folderPath, 'session.db');
-	const db = new Database(dbPath);
-	db.pragma('journal_mode = WAL');
-	db.pragma('synchronous = NORMAL');
-	db.pragma('foreign_keys = ON');
+	return mutex
+}
 
-	const close = () => {
-		if (db.open) {
-			db.close();
-		}
-	};
+/**
+ * stores the full authentication state in a single folder.
+ * Far more efficient than singlefileauthstate
+ *
+ * Again, I wouldn't endorse this for any production level use other than perhaps a bot.
+ * Would recommend writing an auth state for use with a proper SQL or No-SQL DB
+ * */
+export const useMultiFileAuthState = async (
+	folder: string
+): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> => {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const writeData = async (data: any, file: string) => {
+		const filePath = join(folder, fixFileName(file)!)
+		const mutex = getFileLock(filePath)
 
-	db.prepare(`
-		CREATE TABLE IF NOT EXISTS auth_store (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)
-	`).run();
-
-	const getStmt = db.prepare('SELECT key, value FROM auth_store WHERE key = ?');
-	const getManyStmt = (keys: string[]) => {
-		if (keys.length === 0) return [] as Array<{ key: string; value: string }>;
-		const placeholders = keys.map(() => '?').join(', ');
-		return db.prepare(`SELECT key, value FROM auth_store WHERE key IN (${placeholders})`).all(...keys) as Array<{ key: string; value: string }>;
-	};
-	const upsertStmt = db.prepare(`
-		INSERT INTO auth_store (key, value)
-		VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value
-	`);
-	const deleteStmt = db.prepare('DELETE FROM auth_store WHERE key = ?');
-	const writeBatch = db.transaction((entries: Array<[string, unknown]>) => {
-		for (const [key, value] of entries) {
-			const jsonString = JSON.stringify(value, BufferJSON.replacer);
-			upsertStmt.run(key, jsonString);
-		}
-	});
-	const deleteBatch = db.transaction((keys: string[]) => {
-		for (const key of keys) {
-			deleteStmt.run(key);
-		}
-	});
-
-	const readData = (key: string): unknown | null => {
-		try {
-			const row = getStmt.get(key) as { key: string; value: string } | undefined;
-			if (!row) return null;
-			return JSON.parse(row.value, BufferJSON.reviver);
-		} catch {
-			return null;
-		}
-	};
-
-	const readManyData = (keys: string[]): Record<string, unknown> => {
-		const map: Record<string, unknown> = {};
-		if (keys.length === 0) return map;
-
-		for (const row of getManyStmt(keys)) {
+		return mutex.acquire().then(async release => {
 			try {
-				map[row.key] = JSON.parse(row.value, BufferJSON.reviver);
-			} catch {
-				map[row.key] = null;
+				await writeFile(filePath, JSON.stringify(data, BufferJSON.replacer))
+			} finally {
+				release()
 			}
-		}
-		return map;
-	};
+		})
+	}
 
-	const writeData = (key: string, data: unknown) => {
+	const readData = async (file: string) => {
 		try {
-			writeBatch([[key, data]]);
-		} catch (error) {
-			console.error(`Error saving key ${key}:`, error);
-		}
-	};
+			const filePath = join(folder, fixFileName(file)!)
+			const mutex = getFileLock(filePath)
 
-	const removeData = (key: string) => {
+			return await mutex.acquire().then(async release => {
+				try {
+					const data = await readFile(filePath, { encoding: 'utf-8' })
+					return JSON.parse(data, BufferJSON.reviver)
+				} finally {
+					release()
+				}
+			})
+		} catch (error) {
+			return null
+		}
+	}
+
+	const removeData = async (file: string) => {
 		try {
-			deleteStmt.run(key);
-		} catch (error) {
-			console.error(`Error removing key ${key}:`, error);
-		}
-	};
+			const filePath = join(folder, fixFileName(file)!)
+			const mutex = getFileLock(filePath)
 
-	const creds: AuthenticationCreds = (readData('creds') as AuthenticationCreds | null) ?? initAuthCreds();
+			return mutex.acquire().then(async release => {
+				try {
+					await unlink(filePath)
+				} catch {
+				} finally {
+					release()
+				}
+			})
+		} catch {}
+	}
+
+	const folderInfo = await stat(folder).catch(() => {})
+	if (folderInfo) {
+		if (!folderInfo.isDirectory()) {
+			throw new Error(
+				`found something that is not a directory at ${folder}, either delete it or specify a different location`
+			)
+		}
+	} else {
+		await mkdir(folder, { recursive: true })
+	}
+
+	const fixFileName = (file?: string) => file?.replace(/\//g, '__')?.replace(/:/g, '-')
+
+	const creds: AuthenticationCreds = (await readData('creds.json')) || initAuthCreds()
 
 	return {
 		state: {
 			creds,
 			keys: {
-				get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
-					const data = {} as Record<string, SignalDataTypeMap[T]>;
-					const stored = readManyData(ids.map(id => `${type}-${id}`));
+				get: async (type, ids) => {
+					const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
+					await Promise.all(
+						ids.map(async id => {
+							let value = await readData(`${type}-${id}.json`)
+							if (type === 'app-state-sync-key' && value) {
+								value = proto.Message.AppStateSyncKeyData.fromObject(value)
+							}
 
-					for (const id of ids) {
-						const key = `${type}-${id}`;
-						const rawValue = stored[key] as SignalDataTypeMap[T] | undefined;
+							data[id] = value
+						})
+					)
 
-						if (type === 'app-state-sync-key') {
-							const value = rawValue as SignalDataTypeMap['app-state-sync-key'] | undefined;
-							data[id] = (value
-								? proto.Message.AppStateSyncKeyData.fromObject(value as object)
-								: undefined) as unknown as SignalDataTypeMap[T];
-							continue;
-						}
-
-						data[id] = rawValue as unknown as SignalDataTypeMap[T];
-					}
-
-					return data;
+					return data
 				},
 				set: async data => {
-					const writes: Array<[string, unknown]> = [];
-					const removals: string[] = [];
-
+					const tasks: Promise<void>[] = []
 					for (const category in data) {
-						const categoryData = data[category as keyof SignalDataTypeMap] ?? {};
-						for (const id in categoryData) {
-							const value = categoryData[id];
-							const key = `${category}-${id}`;
-							if (value) {
-								writes.push([key, value]);
-							} else {
-								removals.push(key);
-							}
+						for (const id in data[category as keyof SignalDataTypeMap]) {
+							const value = data[category as keyof SignalDataTypeMap]![id]
+							const file = `${category}-${id}.json`
+							tasks.push(value ? writeData(value, file) : removeData(file))
 						}
 					}
 
-					if (writes.length > 0) {
-						writeBatch(writes);
-					}
-					if (removals.length > 0) {
-						deleteBatch(removals);
-					}
+					await Promise.all(tasks)
 				}
 			}
 		},
 		saveCreds: async () => {
-			writeData('creds', creds);
-		},
-		close,
-	};
-};
+			return writeData(creds, 'creds.json')
+		}
+	}
+}
