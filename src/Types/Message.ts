@@ -40,7 +40,8 @@ export const WAMessageStatus = proto.WebMessageInfo.Status
 import type { ILogger } from '../Utils/logger'
 export type WAMediaPayloadURL = { url: URL | string }
 export type WAMediaPayloadStream = { stream: Readable }
-export type WAMediaUpload = Buffer | WAMediaPayloadStream | WAMediaPayloadURL
+export type WAMediaUpload = Buffer | Readable | WAMediaPayloadStream | WAMediaPayloadURL
+
 /** Set of message types that are supported by the library */
 export type MessageType = keyof proto.Message
 

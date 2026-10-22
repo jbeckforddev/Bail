@@ -1,7 +1,7 @@
 import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 import { promises as fs } from 'fs'
-import { type Transform } from 'stream'
+import { type Transform, Readable } from 'stream'
 import { proto } from '../../WAProto/index.js'
 import {
 	CALL_AUDIO_PREFIX,
@@ -123,7 +123,7 @@ const assertColor = async (color: any) => {
 }
 
 export const prepareWAMessageMedia = async (
-	message: AnyMediaMessageContent,
+	message: AnyMediaMessageContent | { [key: string]: Buffer | Readable },
 	options: MessageContentGenerationOptions
 ) => {
 	const logger = options.logger
