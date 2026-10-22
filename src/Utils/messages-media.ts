@@ -311,6 +311,10 @@ export const getStream = async (item: WAMediaUpload, opts?: RequestInit & { maxC
 		return { stream: toReadable(item), type: 'buffer' } as const
 	}
 
+	if (item instanceof Readable || (item && typeof (item as any).pipe === 'function' && typeof (item as any).on === 'function')) {
+		return { stream: item as Readable, type: 'readable' } as const
+	}
+
 	if ('stream' in item) {
 		return { stream: item.stream, type: 'readable' } as const
 	}
@@ -328,6 +332,7 @@ export const getStream = async (item: WAMediaUpload, opts?: RequestInit & { maxC
 
 	return { stream: createReadStream(item.url), type: 'file' } as const
 }
+
 
 /** generates a thumbnail for a given media, if required */
 export async function generateThumbnail(
