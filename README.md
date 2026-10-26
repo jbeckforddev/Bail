@@ -1229,6 +1229,20 @@ await sock.sendMessage(
 )
 ```
 
+When republishing media from another message, download it as a stream and pass that stream directly to `sendMessage`. This avoids buffering the entire download before the upload pipeline starts:
+
+```ts
+const imageStream = await downloadMediaMessage(originalMessage, 'stream', {})
+
+await sock.sendMessage(groupJid, {
+    image: imageStream,
+    caption: 'Group status',
+    groupStatus: true
+})
+```
+
+Use the matching media property (`video`, `audio`, or `document`) for other media types. Downloading to a `Buffer` first and then sending it requires the full download to finish before preparation and upload can begin.
+
 - You can send messages to broadcast lists the same way you send messages to groups & individual chats.
 - Right now, WA Web does not support creating broadcast lists, but you can still delete them.
 - Broadcast IDs are in the format `12345678@broadcast`
