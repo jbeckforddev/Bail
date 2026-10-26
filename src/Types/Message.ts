@@ -58,6 +58,7 @@ export type MessageWithContextInfo =
 	| 'documentMessage'
 	| 'audioMessage'
 	| 'videoMessage'
+	| 'ptvMessage'
 	| 'call'
 	| 'contactsArrayMessage'
 	| 'liveLocationMessage'
