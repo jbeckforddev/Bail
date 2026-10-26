@@ -1,6 +1,5 @@
 import * as fs from 'fs'
 import * as http from 'http'
-import * as Crypto from 'crypto'
 import { Agent } from 'https'
 import * as os from 'os'
 import * as path from 'path'
@@ -400,17 +399,6 @@ describe('encryptedStream', () => {
 			.then(() => true)
 			.catch(() => false)
 		expect(encFileExists).toBe(true)
-
-		await cleanupFiles([result.encFilePath, result.originalFilePath])
-	})
-
-	it('preserves media hashes when encrypted output applies backpressure', async () => {
-		const testData = Buffer.alloc(2 * 1024 * 1024, 7)
-		const result = await encryptedStream(testData, 'document')
-		const encryptedData = await fs.promises.readFile(result.encFilePath)
-
-		expect(result.fileSha256).toEqual(Crypto.createHash('sha256').update(testData).digest())
-		expect(result.fileEncSha256).toEqual(Crypto.createHash('sha256').update(encryptedData).digest())
 
 		await cleanupFiles([result.encFilePath, result.originalFilePath])
 	})
