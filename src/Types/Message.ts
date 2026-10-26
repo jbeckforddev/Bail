@@ -285,7 +285,10 @@ export type AnyRegularMessageContent = (
 	| SharePhoneNumber
 	| RequestPhoneNumber
 ) &
-	ViewOnce
+	ViewOnce & {
+		/** wrap this message as a status shared with the group */
+		groupStatus?: boolean
+	}
 
 export type AnyMessageContent =
 	| AnyRegularMessageContent

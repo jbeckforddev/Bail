@@ -718,7 +718,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 
 		await authState.keys.transaction(async () => {
-			const mediaType = getMediaType(message)
+			const mediaType = getMediaType(normalizeMessageContent(message) || message)
 			if (mediaType) {
 				extraAttrs['mediatype'] = mediaType
 			}
@@ -1374,6 +1374,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		},
 		sendMessage: async (jid: string, content: AnyMessageContent, options: MiscMessageGenerationOptions = {}) => {
 			const userJid = authState.creds.me!.id
+			if ('groupStatus' in content && content.groupStatus && !isJidGroup(jid)) {
+				throw new Boom('Group statuses can only be sent to groups', { statusCode: 400 })
+			}
+
 			if (
 				typeof content === 'object' &&
 				'disappearingMessagesInChat' in content &&

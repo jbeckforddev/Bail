@@ -1208,6 +1208,27 @@ await sock.sendMessage(
 - `broadcast: true` enables broadcast mode
 - `statusJidList`: a list of people that you can get which you need to provide, which are the people who will get this status message.
 
+### Group Status
+
+Set `groupStatus: true` on the message content to share a status in a specific group. Text and media use the regular message content formats; `backgroundColor` can be set in the message options for text statuses.
+
+```ts
+await sock.sendMessage(
+    groupJid,
+    {
+        image: { url: imageUrl },
+        caption: 'Group status',
+        groupStatus: true
+    }
+)
+
+await sock.sendMessage(
+    groupJid,
+    { text: 'Text group status', groupStatus: true },
+    { backgroundColor: '#123456' }
+)
+```
+
 - You can send messages to broadcast lists the same way you send messages to groups & individual chats.
 - Right now, WA Web does not support creating broadcast lists, but you can still delete them.
 - Broadcast IDs are in the format `12345678@broadcast`

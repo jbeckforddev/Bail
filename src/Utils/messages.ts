@@ -691,6 +691,25 @@ export const generateWAMessageContent = async (
 		}
 	}
 
+	if (hasOptionalProperty(message, 'groupStatus') && !!message.groupStatus) {
+		const statusContent = normalizeMessageContent(m)
+		const statusMessageType = Object.keys(statusContent || {})[0] as Extract<
+			keyof proto.IMessage,
+			MessageWithContextInfo
+		>
+		const statusMessage = statusMessageType && statusContent?.[statusMessageType]
+
+		if (!statusMessage) {
+			throw new Boom('Could not mark group status content', { statusCode: 400 })
+		}
+
+		statusMessage.contextInfo = {
+			...statusMessage.contextInfo,
+			isGroupStatus: true
+		}
+		m = { groupStatusMessageV2: { message: m } }
+	}
+
 	if (shouldIncludeReportingToken(m)) {
 		m.messageContextInfo = m.messageContextInfo || {}
 		if (!m.messageContextInfo.messageSecret) {
