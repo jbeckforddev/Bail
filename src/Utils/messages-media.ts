@@ -30,21 +30,28 @@ import { generateMessageIDV2 } from './generics'
 import type { ILogger } from './logger'
 
 const getTmpFilesDirectory = () => tmpdir()
+const MEDIA_STREAM_HIGH_WATER_MARK = 1024 * 1024
 
-const getImageProcessingLibrary = async () => {
+const loadImageProcessingLibrary = async () => {
 	//@ts-ignore
-	const [jimp, sharp] = await Promise.all([import('jimp').catch(() => {}), import('sharp').catch(() => {})])
-
+	const sharp = await import('sharp').catch(() => undefined)
 	if (sharp) {
 		return { sharp }
 	}
 
+	//@ts-ignore
+	const jimp = await import('jimp').catch(() => undefined)
 	if (jimp) {
 		return { jimp }
 	}
 
 	throw new Boom('No image processing library available')
 }
+
+type ImageProcessingLibrary = Awaited<ReturnType<typeof loadImageProcessingLibrary>>
+let imageProcessingLibrary: Promise<ImageProcessingLibrary> | undefined
+
+const getImageProcessingLibrary = () => (imageProcessingLibrary ??= loadImageProcessingLibrary())
 
 export const hkdfInfoKey = (type: MediaType) => {
 	const hkdfInfo = MEDIA_HKDF_KEY_MAPPING[type]
@@ -57,7 +64,7 @@ export const getRawMediaUploadData = async (media: WAMediaUpload, mediaType: Med
 
 	const hasher = Crypto.createHash('sha256')
 	const filePath = join(tmpdir(), mediaType + generateMessageIDV2())
-	const fileWriteStream = createWriteStream(filePath)
+	const fileWriteStream = createWriteStream(filePath, { highWaterMark: MEDIA_STREAM_HIGH_WATER_MARK })
 
 	let fileLength = 0
 	try {
@@ -311,7 +318,10 @@ export const getStream = async (item: WAMediaUpload, opts?: RequestInit & { maxC
 		return { stream: toReadable(item), type: 'buffer' } as const
 	}
 
-	if (item instanceof Readable || (item && typeof (item as any).pipe === 'function' && typeof (item as any).on === 'function')) {
+	if (
+		item instanceof Readable ||
+		(item && typeof (item as any).pipe === 'function' && typeof (item as any).on === 'function')
+	) {
 		return { stream: item as Readable, type: 'readable' } as const
 	}
 
@@ -330,9 +340,8 @@ export const getStream = async (item: WAMediaUpload, opts?: RequestInit & { maxC
 		return { stream: await getHttpStream(item.url, opts), type: 'remote' } as const
 	}
 
-	return { stream: createReadStream(item.url), type: 'file' } as const
+	return { stream: createReadStream(item.url, { highWaterMark: MEDIA_STREAM_HIGH_WATER_MARK }), type: 'file' } as const
 }
-
 
 /** generates a thumbnail for a given media, if required */
 export async function generateThumbnail(
@@ -417,14 +426,14 @@ export const encryptedStream = async (
 	const { cipherKey, iv, macKey } = await getMediaKeys(mediaKey, mediaType)
 
 	const encFilePath = join(getTmpFilesDirectory(), mediaType + generateMessageIDV2() + '-enc')
-	const encFileWriteStream = createWriteStream(encFilePath)
+	const encFileWriteStream = createWriteStream(encFilePath, { highWaterMark: MEDIA_STREAM_HIGH_WATER_MARK })
 
 	let originalFileStream: WriteStream | undefined
 	let originalFilePath: string | undefined
 
 	if (saveOriginalFileIfRequired) {
 		originalFilePath = join(getTmpFilesDirectory(), mediaType + generateMessageIDV2() + '-original')
-		originalFileStream = createWriteStream(originalFilePath)
+		originalFileStream = createWriteStream(originalFilePath, { highWaterMark: MEDIA_STREAM_HIGH_WATER_MARK })
 	}
 
 	let fileLength = 0
@@ -433,13 +442,10 @@ export const encryptedStream = async (
 	const sha256Plain = Crypto.createHash('sha256')
 	const sha256Enc = Crypto.createHash('sha256')
 
-	const onChunk = async (buff: Buffer) => {
+	const writeEncryptedChunk = (buff: Buffer) => {
 		sha256Enc.update(buff)
 		hmac.update(buff)
-		// Handle backpressure: if write returns false, wait for drain
-		if (!encFileWriteStream.write(buff)) {
-			await once(encFileWriteStream, 'drain')
-		}
+		return encFileWriteStream.write(buff)
 	}
 
 	try {
@@ -463,10 +469,14 @@ export const encryptedStream = async (
 			}
 
 			sha256Plain.update(data)
-			await onChunk(aes.update(data))
+			if (!writeEncryptedChunk(aes.update(data))) {
+				await once(encFileWriteStream, 'drain')
+			}
 		}
 
-		await onChunk(aes.final())
+		if (!writeEncryptedChunk(aes.final())) {
+			await once(encFileWriteStream, 'drain')
+		}
 
 		const mac = hmac.digest().slice(0, 10)
 		sha256Enc.update(mac)
@@ -474,7 +484,9 @@ export const encryptedStream = async (
 		const fileSha256 = sha256Plain.digest()
 		const fileEncSha256 = sha256Enc.digest()
 
-		encFileWriteStream.write(mac)
+		if (!encFileWriteStream.write(mac)) {
+			await once(encFileWriteStream, 'drain')
+		}
 
 		const encFinishPromise = once(encFileWriteStream, 'finish')
 		const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve()
@@ -780,7 +792,7 @@ export const uploadWithNodeHttp = async (
 			reject(new Error('Upload timeout'))
 		})
 
-		const stream = createReadStream(filePath)
+		const stream = createReadStream(filePath, { highWaterMark: MEDIA_STREAM_HIGH_WATER_MARK })
 		stream.pipe(req)
 		stream.on('error', err => {
 			req.destroy()
@@ -797,7 +809,7 @@ const uploadWithFetch = async ({
 	agent
 }: UploadParams): Promise<MediaUploadResult | undefined> => {
 	// Convert Node.js Readable to Web ReadableStream
-	const nodeStream = createReadStream(filePath)
+	const nodeStream = createReadStream(filePath, { highWaterMark: MEDIA_STREAM_HIGH_WATER_MARK })
 	const webStream = Readable.toWeb(nodeStream) as ReadableStream
 	// Native fetch only accepts Undici-style dispatchers, not generic https Agents.
 	const dispatcher = typeof (agent as { dispatch?: unknown } | undefined)?.dispatch === 'function' ? agent : undefined
