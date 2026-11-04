@@ -53,7 +53,11 @@ const GCM_TAG_LENGTH = 128 >> 3
 export function aesEncryptGCM(plaintext: Uint8Array, key: Uint8Array, iv: Uint8Array, additionalData: Uint8Array) {
 	const cipher = createCipheriv('aes-256-gcm', key, iv)
 	cipher.setAAD(additionalData)
-	return Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()])
+	const body = cipher.update(plaintext)
+	// GCM is a stream mode: final() only finishes the tag computation and yields no bytes
+	const tail = cipher.final()
+	const tag = cipher.getAuthTag()
+	return Buffer.concat(tail.length ? [body, tail, tag] : [body, tag])
 }
 
 /**
@@ -63,13 +67,17 @@ export function aesEncryptGCM(plaintext: Uint8Array, key: Uint8Array, iv: Uint8A
 export function aesDecryptGCM(ciphertext: Uint8Array, key: Uint8Array, iv: Uint8Array, additionalData: Uint8Array) {
 	const decipher = createDecipheriv('aes-256-gcm', key, iv)
 	// decrypt additional adata
-	const enc = ciphertext.slice(0, ciphertext.length - GCM_TAG_LENGTH)
-	const tag = ciphertext.slice(ciphertext.length - GCM_TAG_LENGTH)
+	const enc = ciphertext.subarray(0, ciphertext.length - GCM_TAG_LENGTH)
+	const tag = ciphertext.subarray(ciphertext.length - GCM_TAG_LENGTH)
 	// set additional data
 	decipher.setAAD(additionalData)
 	decipher.setAuthTag(tag)
 
-	return Buffer.concat([decipher.update(enc), decipher.final()])
+	const body = decipher.update(enc)
+	// final() verifies the tag (throws on mismatch) and yields no bytes in GCM, so the usual
+	// Buffer.concat only copied every decrypted frame once more
+	const tail = decipher.final()
+	return tail.length ? Buffer.concat([body, tail]) : body
 }
 
 export function aesEncryptCTR(plaintext: Uint8Array, key: Uint8Array, iv: Uint8Array) {

@@ -3,7 +3,6 @@ import { proto } from '../../WAProto/index.js'
 import type { WAMessage, WAMessageKey } from '../Types'
 import type { SignalRepositoryWithLIDStore } from '../Types/Signal'
 import {
-	areJidsSameUser,
 	type BinaryNode,
 	isHostedLidUser,
 	isHostedPnUser,
@@ -13,7 +12,8 @@ import {
 	isJidNewsletter,
 	isJidStatusBroadcast,
 	isLidUser,
-	isPnUser
+	isPnUser,
+	jidDecode
 	//	transferDevice
 } from '../WABinary'
 import { unpadRandomMax16 } from './generics'
@@ -159,8 +159,11 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 
 	const addressingContext = extractAddressingContext(stanza)
 
-	const isMe = (jid: string) => areJidsSameUser(jid, meId)
-	const isMeLid = (jid: string) => areJidsSameUser(jid, meLid)
+	// decode our own ids once instead of on every isMe/isMeLid check below
+	const meUser = jidDecode(meId)?.user
+	const meLidUser = jidDecode(meLid)?.user
+	const isMe = (jid: string) => jidDecode(jid)?.user === meUser
+	const isMeLid = (jid: string) => jidDecode(jid)?.user === meLidUser
 
 	if (isPnUser(from) || isLidUser(from) || isHostedLidUser(from) || isHostedPnUser(from)) {
 		if (recipient && !isJidMetaAI(recipient)) {

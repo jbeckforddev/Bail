@@ -54,8 +54,39 @@ export function makeCacheableSignalKeyStore(
 		return `${type}.${id}`
 	}
 
+	const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+		!!value && typeof (value as PromiseLike<unknown>).then === 'function'
+
 	return {
 		async get(type, ids) {
+			// Fast path: every id is already cached, so answer without queueing behind the mutex.
+			// Signal reads (session, identity, sender key) happen several times per message and the
+			// lock made each cache hit wait behind whichever caller was blocked on a store miss.
+			// A concurrent set() under the lock either landed before this read or after it, which
+			// are the same two outcomes the locked read could observe, so nothing is lost.
+			const hits: { [_: string]: SignalDataTypeMap[typeof type] } = {}
+			let allCached = true
+			for (const id of ids) {
+				const item: unknown = cache.get(getUniqueId(type, id))
+				if (isThenable(item)) {
+					// async cache store: only the locked path knows how to await it
+					Promise.resolve(item).catch(() => {})
+					allCached = false
+					break
+				}
+
+				if (typeof item === 'undefined') {
+					allCached = false
+					break
+				}
+
+				hits[id] = item as SignalDataTypeMap[typeof type]
+			}
+
+			if (allCached) {
+				return hits
+			}
+
 			return cacheMutex.runExclusive(async () => {
 				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
 				const idsToFetch: string[] = []
