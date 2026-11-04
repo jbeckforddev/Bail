@@ -25,3 +25,4 @@ test.ts
 TestData
 wa-logs*
 coverage
+.vscode
